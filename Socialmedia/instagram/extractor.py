@@ -53,6 +53,29 @@ def login(driver, username, password):
     except:
         pass
 
+def logout(driver):
+    """Logout from Instagram"""
+    try:
+        print(" Logging out...")
+        driver.get("https://www.instagram.com/")
+        time.sleep(3)
+        
+        # Click profile menu
+        profile_menu = driver.find_element(By.XPATH, "//div[contains(@class, 'x1i10hfl')]//img[@alt]")
+        profile_menu.click()
+        time.sleep(2)
+        
+        # Click logout
+        logout_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Log out') or contains(text(), 'Log Out')]")
+        logout_button.click()
+        time.sleep(3)
+        
+        print(" Logged out successfully.")
+        return True
+    except Exception as e:
+        print(f" Error during logout: {e}")
+        return False
+
 def extract_profile_details(driver, username):
     """Extract basic profile information"""
     profile_url = f"https://www.instagram.com/{username}/"
@@ -581,140 +604,205 @@ def save_checkpoint_csv(profile_data, posts_data, checkpoint_num, target_usernam
     
     print(f" Checkpoint saved: {posts_filename}, {summary_filename}")
 
-def main():
-    print(" Complete Instagram Profile Analyzer - ALL POSTS (CSV OUTPUT)")
-    print("=" * 70)
+def analyze_profile(driver, target_username, max_posts=None):
+    """Analyze a single profile - separated into its own function"""
+    print(f"\n{'='*70}")
+    print(f" ANALYZING PROFILE: {target_username}")
+    print('='*70)
     
+    # Extract profile details
+    print("\n EXTRACTING PROFILE DETAILS...")
+    profile_data = extract_profile_details(driver, target_username)
+    expected_posts = profile_data.get('posts', 0) if isinstance(profile_data.get('posts'), int) else 0
+    
+    # Collect all posts
+    print("\n COLLECTING ALL POSTS...")
+    post_urls = collect_all_posts(driver, target_username, expected_posts)
+    
+    if not post_urls:
+        print(" No posts found!")
+        return
+    
+    # Apply limit if specified
+    if max_posts:
+        post_urls = post_urls[:max_posts]
+        print(f" Limited to first {len(post_urls)} posts as requested")
+    
+    # Analyze each post
+    print(f"\n ANALYZING {len(post_urls)} POSTS...")
+    posts_data = []
+    
+    for i, post_url in enumerate(post_urls, 1):
+        post_data = analyze_single_post(driver, post_url, i, len(post_urls))
+        if post_data:
+            # Add OCR data as backup (only for first 100 posts to save time)
+            if 'screenshot_path' in post_data and i <= 100:
+                ocr_data = extract_from_screenshot(post_data['screenshot_path'])
+                post_data.update(ocr_data)
+            
+            posts_data.append(post_data)
+        
+        # Progress checkpoint - save data every 50 posts
+        if i % 50 == 0:
+            save_checkpoint_csv(profile_data, posts_data, i, target_username)
+        
+        time.sleep(1.5)  # Be respectful to Instagram
+    
+    # Save all data to CSV files
+    print("\n SAVING DATA TO CSV FILES...")
+    
+    # Save profile data
+    profile_filename = f"{target_username}_profile_data.csv"
+    save_profile_to_csv(profile_data, profile_filename)
+    
+    # Save all posts data
+    posts_filename = f"{target_username}_all_posts_data.csv"
+    save_posts_to_csv(posts_data, posts_filename)
+    
+    # Save summary
+    summary_filename = f"{target_username}_analysis_summary.csv"
+    save_summary_to_csv(profile_data, posts_data, summary_filename)
+    
+    # Save top posts
+    top_posts_filename = f"{target_username}_top_posts.csv"
+    save_top_posts_to_csv(posts_data, top_posts_filename, 10)
+    
+    # Display summary
+    print("\n" + "="*70)
+    print(f" ANALYSIS RESULTS FOR {target_username}")
+    print("="*70)
+    
+    print(f"\n PROFILE INFORMATION:")
+    print(f"Username: {profile_data['username']}")
+    print(f"Full Name: {profile_data['full_name']}")
+    print(f"Posts: {profile_data['posts']}")
+    print(f"Followers: {profile_data['followers']}")
+    print(f"Following: {profile_data['following']}")
+    print(f"Verified: {profile_data['verified']}")
+    print(f"Bio: {profile_data['bio'][:100]}..." if len(str(profile_data['bio'])) > 100 else f"Bio: {profile_data['bio']}")
+    
+    valid_posts = [post for post in posts_data if post]
+    print(f"\n POSTS ANALYSIS SUMMARY:")
+    print(f"Total Posts Analyzed: {len(valid_posts)}")
+    print(f"Expected Posts: {expected_posts}")
+    print(f"Coverage: {(len(valid_posts)/expected_posts*100):.1f}%" if expected_posts > 0 else "N/A")
+    print(f"Total Likes: {sum(post['likes'] for post in valid_posts):,}")
+    print(f"Total Comments: {sum(post['comments'] for post in valid_posts):,}")
+    print(f"Total Views: {sum(post['views'] for post in valid_posts):,}")
+    print(f"Average Likes: {sum(post['likes'] for post in valid_posts) / len(valid_posts):.2f}" if valid_posts else "0")
+    print(f"Average Comments: {sum(post['comments'] for post in valid_posts) / len(valid_posts):.2f}" if valid_posts else "0")
+    print(f"Posts with Location: {len([post for post in valid_posts if post['location'] != 'Not Found'])}")
+    print(f"Total Hashtags Used: {sum(len(post['hashtags']) for post in valid_posts)}")
+    print(f"Total Mentions: {sum(len(post['mentions']) for post in valid_posts)}")
+    
+    print(f"\n TOP 5 POSTS BY LIKES:")
+    top_posts = sorted(valid_posts, key=lambda x: x['likes'], reverse=True)[:5]
+    for i, post in enumerate(top_posts, 1):
+        print(f"{i}. {post['likes']:,} likes, {post['comments']:,} comments - {post['url']}")
+    
+    print(f"\n CSV FILES CREATED:")
+    print(f"- Profile data: {profile_filename}")
+    print(f"- All posts data: {posts_filename}")
+    print(f"- Analysis summary: {summary_filename}")
+    print(f"- Top posts: {top_posts_filename}")
+    if any('screenshot_path' in post for post in valid_posts):
+        screenshot_count = len([post for post in valid_posts if 'screenshot_path' in post])
+        print(f"- Screenshots: screenshots/posts/ ({screenshot_count} files)")
+    
+    print(f"\n Analysis complete for {target_username}!")
+
+def main():
+    print(" Complete Instagram Profile Analyzer - MULTIPLE PROFILES (CSV OUTPUT)")
+    print("=" * 70)
+
     username = input("Enter your Instagram username: ")
     password = getpass.getpass("Enter your Instagram password: ")
-    target = input("Enter target Instagram username: ")
-    
-    # Option to analyze all posts or set a custom limit
-    analyze_all = input("Analyze ALL posts? (y/n, default=y): ").lower().strip()
-    if analyze_all == 'n':
-        max_posts = int(input("Enter maximum posts to analyze: "))
-    else:
-        max_posts = None
-        print(" Will analyze ALL posts found in the profile")
+
+    # Option to analyze all posts or set a custom limit (applied per profile)
+    analyze_all_default = input("Analyze ALL posts by default? (y/n, default=y): ").lower().strip()
+    default_analyze_all = analyze_all_default != 'n'
 
     driver = setup_driver()
-    
+
     try:
-        # Login
+        # Login once
         login(driver, username, password)
-        
-        # Extract profile details
-        print("\n EXTRACTING PROFILE DETAILS...")
-        profile_data = extract_profile_details(driver, target)
-        expected_posts = profile_data.get('posts', 0) if isinstance(profile_data.get('posts'), int) else 0
-        
-        # Collect all posts
-        print("\n COLLECTING ALL POSTS...")
-        post_urls = collect_all_posts(driver, target, expected_posts)
-        
-        if not post_urls:
-            print(" No posts found!")
-            return
-        
-        # Apply limit if specified
-        if max_posts:
-            post_urls = post_urls[:max_posts]
-            print(f" Limited to first {len(post_urls)} posts as requested")
-        
-        # Analyze each post
-        print(f"\n ANALYZING {len(post_urls)} POSTS...")
-        posts_data = []
-        
-        for i, post_url in enumerate(post_urls, 1):
-            post_data = analyze_single_post(driver, post_url, i, len(post_urls))
-            if post_data:
-                # Add OCR data as backup (only for first 100 posts to save time)
-                if 'screenshot_path' in post_data and i <= 100:
-                    ocr_data = extract_from_screenshot(post_data['screenshot_path'])
-                    post_data.update(ocr_data)
-                
-                posts_data.append(post_data)
-            
-            # Progress checkpoint - save data every 50 posts
-            if i % 50 == 0:
-                save_checkpoint_csv(profile_data, posts_data, i, target)
-            
-            time.sleep(1.5)  # Be respectful to Instagram
-        
-        # Save all data to CSV files
-        print("\n SAVING DATA TO CSV FILES...")
-        
-        # Save profile data
-        profile_filename = f"{target}_profile_data.csv"
-        save_profile_to_csv(profile_data, profile_filename)
-        
-        # Save all posts data
-        posts_filename = f"{target}_all_posts_data.csv"
-        save_posts_to_csv(posts_data, posts_filename)
-        
-        # Save summary
-        summary_filename = f"{target}_analysis_summary.csv"
-        save_summary_to_csv(profile_data, posts_data, summary_filename)
-        
-        # Save top posts
-        top_posts_filename = f"{target}_top_posts.csv"
-        save_top_posts_to_csv(posts_data, top_posts_filename, 10)
-        
-        # Display summary
-        print("\n" + "="*70)
-        print(" COMPLETE ANALYSIS RESULTS - ALL POSTS")
-        print("="*70)
-        
-        print(f"\n PROFILE INFORMATION:")
-        print(f"Username: {profile_data['username']}")
-        print(f"Full Name: {profile_data['full_name']}")
-        print(f"Posts: {profile_data['posts']}")
-        print(f"Followers: {profile_data['followers']}")
-        print(f"Following: {profile_data['following']}")
-        print(f"Verified: {profile_data['verified']}")
-        print(f"Bio: {profile_data['bio'][:100]}..." if len(str(profile_data['bio'])) > 100 else f"Bio: {profile_data['bio']}")
-        
-        valid_posts = [post for post in posts_data if post]
-        print(f"\n POSTS ANALYSIS SUMMARY:")
-        print(f"Total Posts Analyzed: {len(valid_posts)}")
-        print(f"Expected Posts: {expected_posts}")
-        print(f"Coverage: {(len(valid_posts)/expected_posts*100):.1f}%" if expected_posts > 0 else "N/A")
-        print(f"Total Likes: {sum(post['likes'] for post in valid_posts):,}")
-        print(f"Total Comments: {sum(post['comments'] for post in valid_posts):,}")
-        print(f"Total Views: {sum(post['views'] for post in valid_posts):,}")
-        print(f"Average Likes: {sum(post['likes'] for post in valid_posts) / len(valid_posts):.2f}" if valid_posts else "0")
-        print(f"Average Comments: {sum(post['comments'] for post in valid_posts) / len(valid_posts):.2f}" if valid_posts else "0")
-        print(f"Posts with Location: {len([post for post in valid_posts if post['location'] != 'Not Found'])}")
-        print(f"Total Hashtags Used: {sum(len(post['hashtags']) for post in valid_posts)}")
-        print(f"Total Mentions: {sum(len(post['mentions']) for post in valid_posts)}")
-        
-        print(f"\n  TOP 5 POSTS BY LIKES:")
-        top_posts = sorted(valid_posts, key=lambda x: x['likes'], reverse=True)[:5]
-        for i, post in enumerate(top_posts, 1):
-            print(f"{i}. {post['likes']:,} likes, {post['comments']:,} comments - {post['url']}")
-        
-        print(f"\n  CSV FILES CREATED:")
-        print(f"- Profile data: {profile_filename}")
-        print(f"- All posts data: {posts_filename}")
-        print(f"- Analysis summary: {summary_filename}")
-        print(f"- Top posts: {top_posts_filename}")
-        if any('screenshot_path' in post for post in valid_posts):
-            screenshot_count = len([post for post in valid_posts if 'screenshot_path' in post])
-            print(f"- Screenshots: screenshots/posts/ ({screenshot_count} files)")
-        
-        print(f"\n Analysis complete! All data saved in CSV format.")
-        
+
+        while True:
+            print("\n====================================")
+            target = input("Enter target Instagram username to analyze: ")
+
+            if not target.strip():
+                print(" No username entered, skipping...")
+                continue
+
+            # Ask if user wants to limit posts for this profile
+            if default_analyze_all:
+                max_posts = None
+                print(" Will analyze ALL posts for this profile.")
+            else:
+                limit_choice = input("Analyze ALL posts for this profile? (y/n): ").lower().strip()
+                if limit_choice == 'y':
+                    max_posts = None
+                else:
+                    max_posts = int(input("Enter maximum posts to analyze: "))
+
+            # Extract profile details
+            print("\n EXTRACTING PROFILE DETAILS...")
+            profile_data = extract_profile_details(driver, target)
+            expected_posts = profile_data.get('posts', 0) if isinstance(profile_data.get('posts'), int) else 0
+
+            # Collect all posts
+            print("\n COLLECTING ALL POSTS...")
+            post_urls = collect_all_posts(driver, target, expected_posts)
+
+            if not post_urls:
+                print(" No posts found!")
+            else:
+                # Apply limit if needed
+                if max_posts:
+                    post_urls = post_urls[:max_posts]
+                    print(f" Limited to first {len(post_urls)} posts as requested")
+
+                # Analyze each post
+                print(f"\n ANALYZING {len(post_urls)} POSTS...")
+                posts_data = []
+
+                for i, post_url in enumerate(post_urls, 1):
+                    post_data = analyze_single_post(driver, post_url, i, len(post_urls))
+                    if post_data:
+                        # Add OCR data for first 100 posts
+                        if 'screenshot_path' in post_data and i <= 100:
+                            ocr_data = extract_from_screenshot(post_data['screenshot_path'])
+                            post_data.update(ocr_data)
+
+                        posts_data.append(post_data)
+
+                    # Progress checkpoint every 50 posts
+                    if i % 50 == 0:
+                        save_checkpoint_csv(profile_data, posts_data, i, target)
+
+                    time.sleep(1.5)
+
+                # Save all data
+                print("\n SAVING DATA TO CSV FILES...")
+                save_profile_to_csv(profile_data, f"{target}_profile_data.csv")
+                save_posts_to_csv(posts_data, f"{target}_all_posts_data.csv")
+                save_summary_to_csv(profile_data, posts_data, f"{target}_analysis_summary.csv")
+                save_top_posts_to_csv(posts_data, f"{target}_top_posts.csv", 10)
+
+                print("\n Analysis complete for this profile.")
+
+            # Ask whether to analyze another or logout
+            next_action = input("\nDo you want to analyze another profile? (y/n): ").lower().strip()
+            if next_action != 'y':
+                print(" Logging out and exiting...")
+                break
+
     except Exception as e:
         print(f" Error: {e}")
     finally:
         driver.quit()
-
+        print(" Driver closed.")
 if __name__ == "__main__":
     main()
-
-class Instagram:
-    def __init__(self):
-        pass
-
-    def run(self):
-        main()
