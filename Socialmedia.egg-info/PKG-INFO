@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: Socialmedia
+Version: 0.1.0
+Summary: Unified SDK for Instagram, Pinterest, Quora, YouTube, Threads, and Twitter scraping
+Author: Anirudh Sai
+Requires-Python: >=3.7
